@@ -6316,6 +6316,7 @@ class BambuMQTTClient:
         nozzle_mapping: str | None = None,
         nozzle_slot_extruders: str | None = None,
         plate_uses_only_external: bool = False,
+        url: str | None = None,
     ):
         """Start a print job on the printer.
 
@@ -6333,6 +6334,9 @@ class BambuMQTTClient:
             vibration_cali: Vibration compensation calibration
             layer_inspect: First layer AI inspection
             use_ams: Use AMS for automatic filament changes
+            url: Where the printer finds the file. Default ``ftp://<filename>``
+                (external storage); ``brtc://emmc/<filename>`` after an upload
+                to internal storage over :6000 (#2762).
             plate_uses_only_external: The caller determined from the plate's
                 own filament list that it prints only from the spool holder;
                 use_ams=False then stands even if the mapping names a real
@@ -6551,7 +6555,7 @@ class BambuMQTTClient:
                     "sequence_id": "20000",
                     "command": "project_file",
                     "param": f"Metadata/plate_{plate_id}.gcode",
-                    "url": f"ftp://{filename}",
+                    "url": url or f"ftp://{filename}",
                     "file": filename,
                     "md5": "",
                     "bed_type": "auto",

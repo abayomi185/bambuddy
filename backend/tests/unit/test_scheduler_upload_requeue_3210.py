@@ -123,8 +123,11 @@ async def _scheduler(
     busy: set[int] | None = None,
     scheduler: PrintScheduler | None = None,
     waiting_notify: AsyncMock | None = None,
+    tunnel_upload: AsyncMock | None = None,
 ):
     """A scheduler wired to *ctx*'s database, with every printer idle unless in *busy*.
+
+    The :6000 internal-storage fallback (#2762) fails unless *tunnel_upload* says otherwise.
 
     Pass the same *waiting_notify* to several passes to count notifications
     across them.
@@ -155,6 +158,10 @@ async def _scheduler(
         patch("backend.app.services.print_scheduler.printer_manager.start_print", MagicMock(return_value=True)),
         patch("backend.app.services.print_scheduler.printer_manager.set_awaiting_plate_clear", MagicMock()),
         patch("backend.app.services.print_scheduler.upload_file_async", upload),
+        patch(
+            "backend.app.services.print_scheduler.upload_to_internal_storage_async",
+            tunnel_upload or AsyncMock(side_effect=OSError("no :6000")),
+        ),
         patch("backend.app.services.print_scheduler.delete_file_async", AsyncMock(return_value=True)),
         patch(
             "backend.app.services.print_scheduler.get_ftp_retry_settings",
@@ -192,6 +199,51 @@ async def _item(ctx, item_id: int) -> PrintQueueItem:
 
 
 HANDSHAKE = FtpFailure(FtpFailureKind.HANDSHAKE, "WRONG_VERSION_NUMBER (printer answered in cleartext: 421 ...)")
+
+
+# ---------------------------------------------------------------------------
+# A card refusal falls back to internal storage over :6000 (#2762)
+# ---------------------------------------------------------------------------
+class TestInternalStorageFallback:
+    @pytest.mark.asyncio
+    async def test_storage_refusal_uploads_over_tunnel_and_prints_from_emmc(self, farm):
+        item_id = await farm.add_item(printer_id=farm.ids.refusing, filename="cube.3mf")
+        upload = _upload_refused_by(REFUSING_IP, FtpFailure(FtpFailureKind.STORAGE, "553", "553"))
+        tunnel = AsyncMock()
+
+        async with _scheduler(farm, upload, tunnel_upload=tunnel) as scheduler:
+            await scheduler.check_queue()
+            start_print = scheduler_module.printer_manager.start_print
+
+        tunnel.assert_awaited_once()
+        assert tunnel.await_args.args[0] == REFUSING_IP
+        remote_name = tunnel.await_args.args[3]
+        assert start_print.call_args.kwargs["url"] == f"brtc://emmc/{remote_name}"
+        item = await _item(farm, item_id)
+        assert item.status == "printing"
+        assert farm.ids.refusing not in scheduler._upload_backoff
+
+    @pytest.mark.asyncio
+    async def test_other_failures_do_not_try_the_tunnel(self, farm):
+        await farm.add_item(printer_id=farm.ids.refusing)
+        tunnel = AsyncMock()
+
+        async with _scheduler(farm, _upload_refused_by(REFUSING_IP, HANDSHAKE), tunnel_upload=tunnel) as scheduler:
+            await scheduler.check_queue()
+
+        tunnel.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_ftps_success_prints_from_external_storage(self, farm):
+        await farm.add_item(printer_id=farm.ids.healthy)
+        tunnel = AsyncMock()
+
+        async with _scheduler(farm, _upload_refused_by(REFUSING_IP, HANDSHAKE), tunnel_upload=tunnel) as scheduler:
+            await scheduler.check_queue()
+            start_print = scheduler_module.printer_manager.start_print
+
+        tunnel.assert_not_awaited()
+        assert start_print.call_args.kwargs["url"] is None
 
 
 # ---------------------------------------------------------------------------

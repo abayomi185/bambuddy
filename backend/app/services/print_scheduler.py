@@ -46,6 +46,7 @@ from backend.app.services.bambu_ftp import (
     with_ftp_retry,
 )
 from backend.app.services.bambu_mqtt import _RACK_NOZZLE_IDS, HMS_MQTT_VERIFY_FAILED, resolve_rack_plan_mapping
+from backend.app.services.bambu_tunnel import upload_to_internal_storage_async
 from backend.app.services.filament_deficit import compute_deficit_for_queue_item
 from backend.app.services.finance_budget import (
     create_budget_reservation,
@@ -9505,6 +9506,26 @@ class PrintScheduler:
             uploaded = False
             logger.error("Queue item %s: FTP error: %s (type: %s)", item.id, e, type(e).__name__)
 
+        # FTPS only reaches an SD card or USB stick. A printer without one
+        # refuses with 553, but H2-series, P2S and X2D printers also take the
+        # file into internal storage over the :6000 tunnel, as Bambu Studio
+        # does (#2762). Tried only after that refusal, so setups whose FTPS
+        # upload works are untouched.
+        print_url: str | None = None
+        if not uploaded and upload_failure.failure and upload_failure.failure.kind is FtpFailureKind.STORAGE:
+            try:
+                await upload_to_internal_storage_async(
+                    printer.ip_address,
+                    printer.access_code,
+                    file_path,
+                    remote_filename,
+                    progress_callback=progress_bridge,
+                )
+                uploaded = True
+                print_url = f"brtc://emmc/{remote_filename}"
+            except Exception as e:
+                logger.info("Queue item %s: internal-storage upload over :6000 failed too: %s", item.id, e)
+
         # Clean up injected temp file after upload attempt
         if injected_path and injected_path.exists():
             injected_path.unlink(missing_ok=True)
@@ -9957,6 +9978,7 @@ class PrintScheduler:
             nozzle_mapping=item.nozzle_mapping
             or (json.dumps(resolved_nozzle_mapping) if resolved_nozzle_mapping else None),
             nozzle_slot_extruders=nozzle_slot_extruders,
+            url=print_url,
         )
 
         if started:

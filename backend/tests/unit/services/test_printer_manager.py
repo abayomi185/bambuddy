@@ -479,6 +479,7 @@ class TestPrinterManager:
             nozzle_mapping=None,
             nozzle_slot_extruders=None,
             plate_uses_only_external=False,
+            url=None,
         )
         assert result is True
 

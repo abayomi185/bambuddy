@@ -999,6 +999,7 @@ class PrinterManager:
         nozzle_mapping: str | None = None,
         nozzle_slot_extruders: str | None = None,
         plate_uses_only_external: bool = False,
+        url: str | None = None,
     ) -> bool:
         """Start a print on a connected printer.
 
@@ -1035,6 +1036,7 @@ class PrinterManager:
                 nozzle_mapping=nozzle_mapping,
                 nozzle_slot_extruders=nozzle_slot_extruders,
                 plate_uses_only_external=plate_uses_only_external,
+                url=url,
             )
         return False
 
